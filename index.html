@@ -52,6 +52,13 @@
   <textarea id="inputText" placeholder="Írd be a szöveget..." oninput="updateCharCount()">Hello Atari!</textarea>
   <div id="charCount" style="margin-top:6px; font-size:0.75em; color:#888; text-align:right; letter-spacing:0.5px;"></div>
   <div class="row" style="margin-top:8px;">
+    <label style="font-size:0.8em;color:#888;">Mód:</label>
+    <select id="modeSelect" onchange="changeMode()" style="background:#0a0a1a;color:#00d4ff;border:1px solid #0f3460;padding:6px 10px;border-radius:4px;font-family:monospace;font-size:0.85em;">
+      <option value="atari" selected>Atari FSK (gyors, egzakt PAL)</option>
+      <option value="robust">Robusztus 4-FSK + Reed-Solomon</option>
+    </select>
+  </div>
+  <div class="row" id="baudRow" style="margin-top:8px;">
     <label style="font-size:0.8em;color:#888;">Baud:</label>
     <select id="baudSelect" onchange="updateBaud(); updateCharCount();" style="background:#0a0a1a;color:#00d4ff;border:1px solid #0f3460;padding:6px 10px;border-radius:4px;font-family:monospace;font-size:0.85em;">
       <option value="600" selected>600 (gyors)</option>
@@ -127,8 +134,8 @@
 </div>
 
 <div class="info">
-  PAL órajel: 1.773447 MHz · mark=3976 Hz · space=5310 Hz<br>
-  Automatikus baud detektálás · ±3% drift kompenzáció · CRC-16 CCITT
+  <b>Atari mód:</b> PAL órajel 1.773447 MHz · mark=3976 Hz · space=5310 Hz · CRC-16<br>
+  <b>Robusztus mód:</b> 4-FSK 1000/1500/2000/2500 Hz · 100 sym/s · RS(n+8) hibajavítás
 </div>
 
 <script>
@@ -167,34 +174,51 @@ function getReliableLimit(baud) {
 
 function updateCharCount() {
   const text = document.getElementById('inputText').value;
-  const textBytes = new TextEncoder().encode(text).length; 
+  const textBytes = new TextEncoder().encode(text).length;
+  const mode = document.getElementById('modeSelect')?.value || 'atari';
+  const el = document.getElementById('charCount');
+
+  if (mode === 'robust') {
+    // Robusztus: max 247 bájt, időtartam = (preamble 8 + SFD 8 + (textBytes+1+8)*4 szimbólum) / 100 sym/s
+    const totalSyms = 8 + 8 + (textBytes + 1 + 8) * 4;
+    const duration = totalSyms / 100;
+    let color, warning;
+    if (textBytes === 0)        { color = '#888';    warning = 'üres'; }
+    else if (textBytes <= 100)  { color = '#00ff88'; warning = 'rövid · nagyon robusztus'; }
+    else if (textBytes <= 200)  { color = '#00ff88'; warning = 'megbízható'; }
+    else if (textBytes <= 247)  { color = '#ffcc00'; warning = '⚠ keret-határhoz közeli'; }
+    else                        { color = '#e94560'; warning = '✗ max 247 bájt'; }
+    el.innerHTML = `<span style="color:${color};">${textBytes} bájt · ${duration.toFixed(1)}s · ${warning}</span>`;
+    return;
+  }
+
   const baud = parseInt(document.getElementById('baudSelect').value);
   const baudRate = BAUD_PRESETS[baud].baud;
-  const totalBits = 70 + (textBytes + 3) * 10; 
+  const totalBits = 70 + (textBytes + 3) * 10;
   const duration = totalBits / baudRate;
   const limit = getReliableLimit(baud);
 
-  const el = document.getElementById('charCount');
   let color, warning;
-
   if (textBytes <= limit.good) {
-    color = '#00ff88';
-    warning = 'megbízható';
+    color = '#00ff88'; warning = 'megbízható';
   } else if (textBytes <= limit.warn) {
-    color = '#ffcc00';
-    warning = '⚠ pontatlanabb lehet';
+    color = '#ffcc00'; warning = '⚠ pontatlanabb lehet';
   } else if (textBytes <= limit.max) {
-    color = '#ff8800';
-    warning = '⚠ valószínűleg hibás lesz';
+    color = '#ff8800'; warning = '⚠ valószínűleg hibás lesz';
   } else {
-    color = '#e94560';
-    warning = '✗ ezen a baudon nem fog működni';
+    color = '#e94560'; warning = '✗ ezen a baudon nem fog működni';
   }
-
   el.innerHTML = `<span style="color:${color};">${textBytes} bájt · ${duration.toFixed(1)}s · ${warning}</span>`;
 }
 
-window.addEventListener('DOMContentLoaded', updateCharCount);
+function changeMode() {
+  const mode = document.getElementById('modeSelect').value;
+  const baudRow = document.getElementById('baudRow');
+  if (baudRow) baudRow.style.display = (mode === 'robust') ? 'none' : '';
+  updateCharCount();
+}
+
+window.addEventListener('DOMContentLoaded', () => { changeMode(); });
 
 let actx = null;
 let micStream = null;
@@ -454,35 +478,319 @@ function floatToWav(pcm) {
 function encode() {
   const text = document.getElementById('inputText').value;
   if (!text) return;
+  const mode = document.getElementById('modeSelect').value;
   const c = getCtx(); if (c.state === 'suspended') c.resume();
-  const pcm = pokeyGenerate(textToBits(text));
+  let pcm, label;
+  try {
+    if (mode === 'robust') {
+      pcm = robustGeneratePcm(text);
+      const textBytes = new TextEncoder().encode(text).length;
+      label = `Robusztus 4-FSK+RS · ${textBytes} bájt`;
+    } else {
+      pcm = pokeyGenerate(textToBits(text));
+      label = `Atari FSK · ${text.length} kar · ${Math.round(EXACT_BAUD)} baud`;
+    }
+  } catch (err) {
+    document.getElementById('encStatus').textContent = '✗ ' + err.message;
+    document.getElementById('encStatus').className = 'status err';
+    return;
+  }
   const buf = c.createBuffer(1, pcm.length, SR);
   buf.getChannelData(0).set(pcm);
   const src = c.createBufferSource();
   src.buffer = buf; src.connect(c.destination); src.start();
   drawWave(pcm, 'waveCanvas', '#00d4ff');
   document.getElementById('encStatus').textContent =
-    `✓ Lejátszva (${text.length} kar · ${(pcm.length/SR).toFixed(2)}s · ${Math.round(EXACT_BAUD)} baud)`;
+    `✓ Lejátszva (${label} · ${(pcm.length/SR).toFixed(2)}s)`;
   document.getElementById('encStatus').className = 'status ok';
 }
 
 function showDecoded(text) {
-  const baud = window._lastDecodedBaud || '?';
-  const drift = window._lastDecodedDrift || 0;
-  const driftStr = drift !== 0 ? ` · drift ${drift > 0 ? '+' : ''}${drift.toFixed(2)}%` : '';
+  const mode = window._lastMode || 'atari';
+  let info;
+  if (mode === 'robust') {
+    info = `Robusztus 4-FSK+RS`;
+  } else {
+    const baud = window._lastDecodedBaud || '?';
+    const drift = window._lastDecodedDrift || 0;
+    const driftStr = drift !== 0 ? ` · drift ${drift > 0 ? '+' : ''}${drift.toFixed(2)}%` : '';
+    info = `Atari ${baud} baud${driftStr}`;
+  }
   document.getElementById('decodedText').textContent = text;
-  document.getElementById('decStatus').textContent = `✓ Dekódolva @ ${baud} baud${driftStr}: "${text}"`;
+  document.getElementById('decStatus').textContent = `✓ Dekódolva @ ${info}: "${text}"`;
   document.getElementById('decStatus').className = 'status ok';
 }
 
 function downloadWav() {
   const text = document.getElementById('inputText').value;
   if (!text) return;
-  const pcm = pokeyGenerate(textToBits(text));
+  const mode = document.getElementById('modeSelect').value;
+  let pcm, fname;
+  try {
+    if (mode === 'robust') {
+      pcm = robustGeneratePcm(text);
+      fname = 'atari_robust.wav';
+    } else {
+      pcm = pokeyGenerate(textToBits(text));
+      fname = 'atari_adat.wav';
+    }
+  } catch (err) {
+    document.getElementById('encStatus').textContent = '✗ ' + err.message;
+    document.getElementById('encStatus').className = 'status err';
+    return;
+  }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([floatToWav(pcm)], {type: 'audio/wav'}));
-  a.download = 'atari_adat.wav'; a.click();
+  a.download = fname; a.click();
 }
+
+// ==========================================================================
+// ROBUSZTUS MÓD: 4-FSK + Reed-Solomon (GF(256), nsym=8)
+// ==========================================================================
+
+// --- GF(256) aritmetika, primitív polinom 0x11d ---
+const GF_EXP = new Uint8Array(512);
+const GF_LOG = new Uint8Array(256);
+(function initGF() {
+  let x = 1;
+  for (let i = 0; i < 255; i++) {
+    GF_EXP[i] = x; GF_LOG[x] = i;
+    x <<= 1; if (x & 0x100) x ^= 0x11d;
+  }
+  for (let i = 255; i < 512; i++) GF_EXP[i] = GF_EXP[i - 255];
+})();
+const gfMul = (a, b) => (a === 0 || b === 0) ? 0 : GF_EXP[GF_LOG[a] + GF_LOG[b]];
+const gfDiv = (a, b) => (a === 0) ? 0 : GF_EXP[(GF_LOG[a] + 255 - GF_LOG[b]) % 255];
+const gfInv = (x) => GF_EXP[255 - GF_LOG[x]];
+
+// Polinom műveletek (index 0 = legmagasabb fokszám)
+const polyScale = (p, x) => p.map(c => gfMul(c, x));
+function polyAdd(p, q) {
+  const r = new Array(Math.max(p.length, q.length)).fill(0);
+  for (let i = 0; i < p.length; i++) r[i + r.length - p.length] = p[i];
+  for (let i = 0; i < q.length; i++) r[i + r.length - q.length] ^= q[i];
+  return r;
+}
+function polyMul(p, q) {
+  const r = new Array(p.length + q.length - 1).fill(0);
+  for (let i = 0; i < p.length; i++)
+    for (let j = 0; j < q.length; j++)
+      r[i + j] ^= gfMul(p[i], q[j]);
+  return r;
+}
+function polyEval(p, x) {
+  let y = p[0];
+  for (let i = 1; i < p.length; i++) y = gfMul(y, x) ^ p[i];
+  return y;
+}
+
+// --- Reed-Solomon encoder/decoder ---
+function rsGenerator(nsym) {
+  let g = [1];
+  for (let i = 0; i < nsym; i++) g = polyMul(g, [1, GF_EXP[i]]);
+  return g;
+}
+function rsEncode(data, nsym) {
+  const gen = rsGenerator(nsym);
+  const out = new Array(data.length + nsym).fill(0);
+  for (let i = 0; i < data.length; i++) out[i] = data[i];
+  for (let i = 0; i < data.length; i++) {
+    const c = out[i];
+    if (c !== 0) for (let j = 1; j < gen.length; j++) out[i + j] ^= gfMul(gen[j], c);
+  }
+  for (let i = 0; i < data.length; i++) out[i] = data[i];
+  return out;
+}
+function rsSyndromes(msg, nsym) {
+  const s = new Array(nsym);
+  for (let i = 0; i < nsym; i++) s[i] = polyEval(msg, GF_EXP[i]);
+  return s;
+}
+function rsFindErrorLocator(synd, nsym) {
+  let eL = [1], oL = [1];
+  for (let i = 0; i < nsym; i++) {
+    let d = synd[i];
+    for (let j = 1; j < eL.length; j++) d ^= gfMul(eL[eL.length - 1 - j], synd[i - j]);
+    oL = oL.concat([0]);
+    if (d !== 0) {
+      if (oL.length > eL.length) {
+        const nL = polyScale(oL, d);
+        oL = polyScale(eL, gfInv(d));
+        eL = nL;
+      }
+      eL = polyAdd(eL, polyScale(oL, d));
+    }
+  }
+  while (eL.length > 0 && eL[0] === 0) eL.shift();
+  return eL;
+}
+function rsFindErrors(eL, nm) {
+  const e = eL.length - 1, p = [];
+  for (let i = 0; i < nm; i++)
+    if (polyEval(eL, GF_EXP[(255 - i) % 255]) === 0) p.push(nm - 1 - i);
+  return p.length === e ? p : null;
+}
+function rsCorrectErrata(msg, synd, errPos) {
+  const coefPos = errPos.map(p => msg.length - 1 - p);
+  let eLoc = [1];
+  for (const cp of coefPos) eLoc = polyMul(eLoc, [GF_EXP[cp], 1]);
+  const synPoly = [...synd].reverse();
+  const mulRes = polyMul(synPoly, eLoc);
+  const omega = mulRes.slice(mulRes.length - synd.length);
+  const corr = msg.slice();
+  for (let i = 0; i < coefPos.length; i++) {
+    const Xi = GF_EXP[coefPos[i]];
+    const XiInv = gfInv(Xi);
+    const num = polyEval(omega, XiInv);
+    let denom = 1;
+    for (let j = 0; j < coefPos.length; j++) {
+      if (j !== i) denom = gfMul(denom, 1 ^ gfMul(GF_EXP[coefPos[j]], XiInv));
+    }
+    if (denom === 0) throw new Error('Forney denom=0');
+    corr[errPos[i]] ^= gfDiv(num, denom);
+  }
+  return corr;
+}
+function rsDecode(msg, nsym) {
+  const synd = rsSyndromes(msg, nsym);
+  let ok = true;
+  for (let i = 0; i < nsym; i++) if (synd[i] !== 0) { ok = false; break; }
+  if (ok) return msg.slice(0, msg.length - nsym);
+  const eL = rsFindErrorLocator(synd, nsym);
+  const ne = eL.length - 1;
+  if (ne === 0 || ne * 2 > nsym) throw new Error('too many errors');
+  const ep = rsFindErrors(eL, msg.length);
+  if (!ep) throw new Error('positions not found');
+  const c = rsCorrectErrata(msg, synd, ep);
+  const s2 = rsSyndromes(c, nsym);
+  for (let i = 0; i < nsym; i++) if (s2[i] !== 0) throw new Error('verify failed');
+  return c.slice(0, c.length - nsym);
+}
+
+// --- Robusztus FSK protokoll paraméterei ---
+const ROBUST_FREQS = [1000, 1500, 2000, 2500];
+const ROBUST_SYM_RATE = 100;
+const ROBUST_SYM_LEN = SR / ROBUST_SYM_RATE;
+const ROBUST_NSYM = 8;
+const ROBUST_PREAMBLE = [0, 0, 0, 0, 0, 0, 0, 0];
+const ROBUST_SFD = [3, 0, 3, 0, 1, 2, 0, 2];
+
+function robustBytesToSymbols(bytes) {
+  const syms = [];
+  for (const b of bytes) {
+    syms.push((b >> 6) & 3, (b >> 4) & 3, (b >> 2) & 3, b & 3);
+  }
+  return syms;
+}
+
+function robustMakeFrame(text) {
+  const textBytes = Array.from(new TextEncoder().encode(text));
+  if (textBytes.length > 247) throw new Error('Üzenet túl hosszú (max 247 bájt)');
+  const data = [textBytes.length, ...textBytes];
+  const rsCoded = rsEncode(data, ROBUST_NSYM);
+  return [...ROBUST_PREAMBLE, ...ROBUST_SFD, ...robustBytesToSymbols(rsCoded)];
+}
+
+function robustGeneratePcm(text) {
+  const symbols = robustMakeFrame(text);
+  const totalSamples = Math.ceil(symbols.length * ROBUST_SYM_LEN) + 1;
+  const out = new Float32Array(totalSamples);
+  let phase = 0.0;
+  for (let i = 0; i < symbols.length; i++) {
+    const freq = ROBUST_FREQS[symbols[i]];
+    const inc = 2 * Math.PI * freq / SR;
+    const startIdx = Math.round(i * ROBUST_SYM_LEN);
+    const endIdx = Math.round((i + 1) * ROBUST_SYM_LEN);
+    for (let s = startIdx; s < endIdx && s < totalSamples; s++) {
+      out[s] = Math.sin(phase);
+      phase += inc;
+    }
+  }
+  let mx = 0;
+  for (let i = 0; i < out.length; i++) if (Math.abs(out[i]) > mx) mx = Math.abs(out[i]);
+  if (mx > 0) for (let i = 0; i < out.length; i++) out[i] = out[i] / mx * 0.85;
+  return out;
+}
+
+function robustDemodulate(samples, offset) {
+  const syms = [], confs = [];
+  const symLenInt = Math.round(ROBUST_SYM_LEN);
+  let iF = offset;
+  while (iF + symLenInt <= samples.length) {
+    const iStart = Math.round(iF);
+    const e = ROBUST_FREQS.map(f => goertzel(samples, iStart, symLenInt, f));
+    let best = 0, maxE = e[0];
+    for (let k = 1; k < 4; k++) if (e[k] > maxE) { maxE = e[k]; best = k; }
+    const total = e[0] + e[1] + e[2] + e[3];
+    syms.push(best);
+    confs.push(total > 0 ? maxE / total : 0);
+    iF += ROBUST_SYM_LEN;
+  }
+  return { syms, confs };
+}
+
+function robustDecode(samples) {
+  const symLenInt = Math.round(ROBUST_SYM_LEN);
+  const step = Math.max(1, Math.floor(symLenInt / 8));
+
+  for (let offset = 0; offset < symLenInt; offset += step) {
+    const { syms, confs } = robustDemodulate(samples, offset);
+    if (syms.length < 30) continue;
+
+    let avgConf = 0;
+    for (const c of confs) avgConf += c;
+    avgConf /= confs.length;
+    if (avgConf < 0.3) continue;
+
+    for (let pos = 0; pos + ROBUST_SFD.length + 36 <= syms.length; pos++) {
+      let match = 0;
+      for (let k = 0; k < ROBUST_SFD.length; k++) if (syms[pos + k] === ROBUST_SFD[k]) match++;
+      if (match < ROBUST_SFD.length - 1) continue;
+
+      const dataStart = pos + ROBUST_SFD.length;
+      const maxBytes = Math.floor((syms.length - dataStart) / 4);
+      if (maxBytes < 9) continue;
+
+      const lenByte = (syms[dataStart]<<6) | (syms[dataStart+1]<<4) | (syms[dataStart+2]<<2) | syms[dataStart+3];
+      if (lenByte > 247) continue;
+
+      const totalBytes = lenByte + 1 + ROBUST_NSYM;
+      if (maxBytes < totalBytes) continue;
+
+      const raw = new Array(totalBytes);
+      for (let b = 0; b < totalBytes; b++) {
+        const o = dataStart + b * 4;
+        raw[b] = (syms[o]<<6) | (syms[o+1]<<4) | (syms[o+2]<<2) | syms[o+3];
+      }
+
+      try {
+        const decoded = rsDecode(raw, ROBUST_NSYM);
+        const textBytes = decoded.slice(1, 1 + decoded[0]);
+        return new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(textBytes));
+      } catch (e) { /* continue search */ }
+    }
+  }
+  throw new Error('Nem található érvényes robusztus keret');
+}
+
+// --- Egyesített dekóder: a kiválasztott módot próbálja először, aztán a másikat ---
+function decodeAnyMode(samples) {
+  const mode = document.getElementById('modeSelect')?.value || 'atari';
+  const tryAtari = () => { window._lastMode = 'atari'; return decodeWithPhaseSearch(samples); };
+  const tryRobust = () => { window._lastMode = 'robust'; return robustDecode(samples); };
+
+  if (mode === 'robust') {
+    try { return tryRobust(); } catch (e1) {
+      try { return tryAtari(); } catch (e2) { throw e1; }
+    }
+  } else {
+    try { return tryAtari(); } catch (e1) {
+      try { return tryRobust(); } catch (e2) { throw e1; }
+    }
+  }
+}
+
+// ==========================================================================
 
 function decodeFile(input) {
   const file = input.files[0];
@@ -505,7 +813,7 @@ function decodeFile(input) {
         for (let i = 0; i < newLen; i++) samples[i] = src2[Math.floor(i * ratio)];
       }
       drawWave(samples, 'decCanvas', '#e94560');
-      const text = decodeWithPhaseSearch(samples);
+      const text = decodeAnyMode(samples);
       showDecoded(text);
     } catch (err) {
       document.getElementById('decodedText').textContent = '—';
@@ -515,8 +823,6 @@ function decodeFile(input) {
   };
   reader.readAsArrayBuffer(file);
 }
-
-// --- Jelszintmérő vizualizáció ---
 // Közös skálázó: dB → százalék egy adott min..max sávon
 function dbToPct(db, minDb, maxDb) {
   if (!isFinite(db)) return 0;
@@ -891,7 +1197,7 @@ async function startMic(mode = 'decode') {
       setTimeout(() => {
         try {
           if (!micListening || micDecoded) { decoding = false; return; }
-          const text = decodeWithPhaseSearch(snapshot);
+          const text = decodeAnyMode(snapshot);
           showDecoded(text);
           micDecoded = true;
           decoding = false;
