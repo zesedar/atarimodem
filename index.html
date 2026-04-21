@@ -1,0 +1,976 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Atari Kazetta Emulátor</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #1a1a2e; color: #e0e0e0; font-family: 'Courier New', monospace; display: flex; flex-direction: column; align-items: center; min-height: 100vh; padding: 30px 20px; }
+  h1 { color: #00d4ff; font-size: 1.4em; margin-bottom: 6px; letter-spacing: 2px; text-transform: uppercase; }
+  .subtitle { color: #666; font-size: 0.75em; margin-bottom: 30px; letter-spacing: 1px; }
+  .card { background: #16213e; border: 1px solid #0f3460; border-radius: 10px; padding: 24px; width: 100%; max-width: 520px; margin-bottom: 16px; }
+  .card h2 { color: #00d4ff; font-size: 0.85em; letter-spacing: 1px; margin-bottom: 14px; text-transform: uppercase; }
+  textarea { width: 100%; background: #0a0a1a; border: 1px solid #0f3460; border-radius: 6px; color: #e0e0e0; font-family: 'Courier New', monospace; font-size: 0.95em; padding: 10px; resize: vertical; min-height: 70px; outline: none; }
+  textarea:focus { border-color: #00d4ff; }
+  button { margin-top: 12px; padding: 10px 22px; border: none; border-radius: 6px; font-family: 'Courier New', monospace; font-size: 0.9em; cursor: pointer; letter-spacing: 1px; transition: all 0.2s; }
+  .btn-encode { background: #00d4ff; color: #0a0a1a; font-weight: bold; }
+  .btn-encode:hover { background: #00aacc; }
+  .btn-dl { background: #0f3460; color: #00d4ff; border: 1px solid #00d4ff; margin-left: 8px; }
+  .btn-dl:hover { background: #1a4a7a; }
+  .btn-mic { background: #e94560; color: white; font-weight: bold; }
+  .btn-mic:hover { background: #c73652; }
+  .btn-mic.active { background: #555; border: 1px solid #888; }
+  .btn-tone { background: #ffcc00; color: #0a0a1a; font-weight: bold; margin-left: 8px; }
+  .btn-tone:hover { background: #d4a800; }
+  .btn-tone.active { background: #555; border: 1px solid #888; color: #ffcc00; }
+  .btn-cal { background: #ffcc00; color: #0a0a1a; font-weight: bold; margin-left: 8px; }
+  .btn-cal:hover { background: #d4a800; }
+  .btn-cal.active { background: #555; border: 1px solid #888; color: #ffcc00; }
+  .meter-row { display: flex; justify-content: space-between; font-size: 0.72em; color: #888; margin-top: 8px; margin-bottom: 2px; letter-spacing: 0.5px; }
+  .meter-bar { width: 100%; height: 7px; background: #0a0a1a; border: 1px solid #0f3460; border-radius: 3px; overflow: hidden; }
+  .meter-fill { width: 0%; height: 100%; background: #555; transition: width 0.08s ease-out, background-color 0.1s; }
+  .meter-advice { font-size: 0.75em; text-align: center; margin-top: 10px; color: #888; font-weight: bold; letter-spacing: 0.3px; min-height: 18px; padding: 4px; }
+  .file-label { display: inline-block; margin-top: 12px; padding: 10px 22px; background: #0f3460; color: #00d4ff; border: 1px solid #00d4ff; font-weight: bold; border-radius: 6px; font-family: 'Courier New', monospace; font-size: 0.9em; cursor: pointer; letter-spacing: 1px; margin-left: 8px; }
+  .file-label:hover { background: #1a4a7a; }
+  canvas { width: 100%; height: 80px; background: #0a0a1a; border: 1px solid #0f3460; border-radius: 6px; margin-top: 12px; display: block; }
+  .status { margin-top: 10px; font-size: 0.8em; color: #888; min-height: 18px; }
+  .status.ok { color: #00ff88; }
+  .status.err { color: #e94560; }
+  .decoded-output { margin-top: 10px; padding: 10px; background: #0a0a1a; border: 1px solid #0f3460; border-radius: 6px; font-size: 0.95em; color: #00ff88; min-height: 36px; word-break: break-all; }
+  .info { font-size: 0.72em; color: #444; margin-top: 20px; text-align: center; line-height: 1.6; }
+  .row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+</style>
+</head>
+<body>
+
+<h1>📼 Atari Kazetta Emulátor</h1>
+<p class="subtitle">Egzakt PAL frekvenciák · fázisfolytonos · Goertzel dekóder</p>
+
+<div class="card">
+  <h2>📼 Szöveg → Hang</h2>
+  <textarea id="inputText" placeholder="Írd be a szöveget..." oninput="updateCharCount()">Hello Atari!</textarea>
+  <div id="charCount" style="margin-top:6px; font-size:0.75em; color:#888; text-align:right; letter-spacing:0.5px;"></div>
+  <div class="row" style="margin-top:8px;">
+    <label style="font-size:0.8em;color:#888;">Baud:</label>
+    <select id="baudSelect" onchange="updateBaud(); updateCharCount();" style="background:#0a0a1a;color:#00d4ff;border:1px solid #0f3460;padding:6px 10px;border-radius:4px;font-family:monospace;font-size:0.85em;">
+      <option value="600" selected>600 (gyors)</option>
+      <option value="300">300 (+3 dB)</option>
+      <option value="150">150 (+6 dB)</option>
+      <option value="75">75 (+9 dB, lassú)</option>
+    </select>
+  </div>
+  <div class="row">
+    <button class="btn-encode" onclick="encode()">▶ Lejátszás</button>
+    <button class="btn-dl" onclick="downloadWav()">💾 WAV letöltés</button>
+    <button class="btn-tone" id="calToneBtn" onclick="toggleCalibrationTone()">🔊 Teszt hang</button>
+  </div>
+  <canvas id="waveCanvas"></canvas>
+  <div class="status" id="encStatus"></div>
+</div>
+
+<div class="card">
+  <h2>🔍 Hang → Szöveg</h2>
+  <div class="row">
+    <button class="btn-mic" id="micBtn" onclick="toggleMic()">🎤 Mikrofon</button>
+    <button class="btn-cal" id="calMicBtn" onclick="toggleCalibrationMic()">🎯 Kalibráló</button>
+    <label class="file-label">
+      📂 WAV fájl
+      <input type="file" id="wavFile" accept=".wav,audio/*" style="display:none" onchange="decodeFile(this)">
+    </label>
+  </div>
+  <canvas id="decCanvas"></canvas>
+  
+  <!-- Valós idejű mérőpanel -->
+  <div id="micMeterPanel" style="display: none;">
+    <!-- RMS szint -->
+    <div class="meter-row">
+      <span>Jelszint (RMS)</span>
+      <span id="rmsText">- dBFS</span>
+    </div>
+    <div class="meter-bar"><div id="rmsBar" class="meter-fill"></div></div>
+
+    <!-- Peak szint -->
+    <div class="meter-row">
+      <span>Csúcsérték (peak)</span>
+      <span id="peakText">- dBFS</span>
+    </div>
+    <div class="meter-bar"><div id="peakBar" class="meter-fill"></div></div>
+
+    <!-- SNR -->
+    <div class="meter-row">
+      <span>Jel/zaj arány (F0+F1 vs ref)</span>
+      <span id="snrText">- dB</span>
+    </div>
+    <div class="meter-bar"><div id="snrBar" class="meter-fill"></div></div>
+
+    <!-- F0 (space) -->
+    <div class="meter-row">
+      <span>Space — F0 · 5310 Hz</span>
+      <span id="f0Text">- dB</span>
+    </div>
+    <div class="meter-bar"><div id="f0Bar" class="meter-fill"></div></div>
+
+    <!-- F1 (mark) -->
+    <div class="meter-row">
+      <span>Mark — F1 · 3976 Hz</span>
+      <span id="f1Text">- dB</span>
+    </div>
+    <div class="meter-bar"><div id="f1Bar" class="meter-fill"></div></div>
+
+    <!-- Tanács -->
+    <div id="micAdvice" class="meter-advice">—</div>
+  </div>
+  
+  <div class="status" id="decStatus">Várakozás...</div>
+  <div class="decoded-output" id="decodedText">—</div>
+</div>
+
+<div class="info">
+  PAL órajel: 1.773447 MHz · mark=3976 Hz · space=5310 Hz<br>
+  Automatikus baud detektálás · ±3% drift kompenzáció · CRC-16 CCITT
+</div>
+
+<script>
+// --- Egzakt Atari 800XL PAL SIO paraméterek ---
+const PAL_CLK = 1773447.0;
+const EXACT_F1 = PAL_CLK / (2 * 223);    // 3976.34 Hz — mark (1 bit)
+const EXACT_F0 = PAL_CLK / (2 * 167);    // 5309.72 Hz — space (0 bit)
+const SR = 44100;
+
+// Egzakt PAL timer divisorok minden baudrate-hez
+const BAUD_PRESETS = {
+  600: { divisor: 1477, baud: PAL_CLK / (2 * 1478) },   // 599.95
+  300: { divisor: 2955, baud: PAL_CLK / (2 * 2956) },   // 299.97
+  150: { divisor: 5910, baud: PAL_CLK / (2 * 5911) },   // 150.01
+  75:  { divisor: 11822, baud: PAL_CLK / (2 * 11823) }  // 75.00
+};
+
+let EXACT_BAUD = BAUD_PRESETS[600].baud;
+let BIT_N = Math.round(SR / EXACT_BAUD);
+
+function updateBaud() {
+  const val = parseInt(document.getElementById('baudSelect').value);
+  EXACT_BAUD = BAUD_PRESETS[val].baud;
+  BIT_N = Math.round(SR / EXACT_BAUD);
+}
+
+function getReliableLimit(baud) {
+  switch (baud) {
+    case 600: return { good: 100, warn: 150, max: 200 };
+    case 300: return { good: 80, warn: 120, max: 180 };
+    case 150: return { good: 60, warn: 100, max: 150 };
+    case 75:  return { good: 40, warn: 80, max: 120 };
+    default:  return { good: 100, warn: 150, max: 200 };
+  }
+}
+
+function updateCharCount() {
+  const text = document.getElementById('inputText').value;
+  const textBytes = new TextEncoder().encode(text).length; 
+  const baud = parseInt(document.getElementById('baudSelect').value);
+  const baudRate = BAUD_PRESETS[baud].baud;
+  const totalBits = 70 + (textBytes + 3) * 10; 
+  const duration = totalBits / baudRate;
+  const limit = getReliableLimit(baud);
+
+  const el = document.getElementById('charCount');
+  let color, warning;
+
+  if (textBytes <= limit.good) {
+    color = '#00ff88';
+    warning = 'megbízható';
+  } else if (textBytes <= limit.warn) {
+    color = '#ffcc00';
+    warning = '⚠ pontatlanabb lehet';
+  } else if (textBytes <= limit.max) {
+    color = '#ff8800';
+    warning = '⚠ valószínűleg hibás lesz';
+  } else {
+    color = '#e94560';
+    warning = '✗ ezen a baudon nem fog működni';
+  }
+
+  el.innerHTML = `<span style="color:${color};">${textBytes} bájt · ${duration.toFixed(1)}s · ${warning}</span>`;
+}
+
+window.addEventListener('DOMContentLoaded', updateCharCount);
+
+let actx = null;
+let micStream = null;
+let micProcessor = null;
+let micListening = false;
+let micMode = 'decode'; // 'decode' | 'calibrate'
+let micBuf = [];
+let micDecoded = false;
+
+function getCtx() {
+  if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SR });
+  return actx;
+}
+
+function crc16(data) {
+  let crc = 0xFFFF;
+  for (const byte of data) {
+    crc ^= byte << 8;
+    for (let i = 0; i < 8; i++) {
+      if (crc & 0x8000) crc = ((crc << 1) ^ 0x1021) & 0xFFFF;
+      else crc = (crc << 1) & 0xFFFF;
+    }
+  }
+  return crc;
+}
+
+function textToBits(text) {
+  const bits = [];
+  for (let i = 0; i < 20; i++) bits.push(1);
+  for (let i = 0; i < 3; i++) addByte(bits, 0x55);
+  const enc = new TextEncoder().encode(text);
+  addByte(bits, enc.length & 0xFF);
+  for (const b of enc) addByte(bits, b);
+  const crcInput = new Uint8Array(enc.length + 1);
+  crcInput[0] = enc.length & 0xFF;
+  crcInput.set(enc, 1);
+  const crc = crc16(crcInput);
+  addByte(bits, (crc >> 8) & 0xFF); 
+  addByte(bits, crc & 0xFF);         
+  for (let i = 0; i < 10; i++) bits.push(1);
+  return bits;
+}
+
+function addByte(bits, byte) {
+  bits.push(0);
+  for (let i = 0; i < 8; i++) bits.push((byte >> i) & 1);
+  bits.push(1);
+}
+
+function pokeyGenerate(bits) {
+  const exactBitLen = SR / EXACT_BAUD; 
+  const totalSamples = Math.ceil(bits.length * exactBitLen) + 1;
+  const raw = new Float32Array(totalSamples);
+
+  let phase = 0.0;
+  for (let i = 0; i < bits.length; i++) {
+    const freq = bits[i] ? EXACT_F1 : EXACT_F0;
+    const inc = 2 * Math.PI * freq / SR;
+    const endPos = (i + 1) * exactBitLen;
+    const endIdx = Math.round(endPos);
+    const startIdx = Math.round(i * exactBitLen);
+
+    for (let s = startIdx; s < endIdx && s < totalSamples; s++) {
+      raw[s] = Math.sin(phase) >= 0 ? 1.0 : -1.0;
+      phase += inc;
+    }
+  }
+
+  const dt = 1.0 / SR;
+  const rc = 1.0 / (2 * Math.PI * 8000);
+  const alpha = dt / (rc + dt);
+  const out = new Float32Array(raw.length);
+  out[0] = raw[0];
+  for (let i = 1; i < raw.length; i++) out[i] = out[i-1] + alpha * (raw[i] - out[i-1]);
+
+  let mx = 0;
+  for (let i = 0; i < out.length; i++) if (Math.abs(out[i]) > mx) mx = Math.abs(out[i]);
+  if (mx > 0) for (let i = 0; i < out.length; i++) out[i] = out[i] / mx * 0.85;
+  return out;
+}
+
+function goertzel(samples, start, len, freq) {
+  const k = freq * len / SR;
+  const w = 2 * Math.PI * k / len;
+  const coeff = 2 * Math.cos(w);
+  let s0 = 0, s1 = 0, s2 = 0;
+  const end = start + len;
+  for (let i = start; i < end; i++) {
+    s0 = (i < samples.length ? samples[i] : 0) + coeff * s1 - s2;
+    s2 = s1; s1 = s0;
+  }
+  return s2 * s2 + s1 * s1 - coeff * s1 * s2;
+}
+
+function tryDecodeAtDrift(samples, bitLenFloat, offset, bitN) {
+  const bits = [];
+  const confidences = [];
+  let iF = offset;
+
+  while (iF + bitN <= samples.length) {
+    const iStart = Math.round(iF);
+    const e0 = goertzel(samples, iStart, bitN, EXACT_F0);
+    const e1 = goertzel(samples, iStart, bitN, EXACT_F1);
+    const total = e0 + e1;
+    bits.push(e1 > e0 ? 1 : 0);
+    confidences.push(total > 0 ? Math.abs(e1 - e0) / total : 0);
+    iF += bitLenFloat;
+  }
+
+  if (bits.length < 40) return null;
+
+  let avgEnergy = 0;
+  for (let k = 0; k < bits.length; k++) avgEnergy += confidences[k];
+  avgEnergy /= bits.length;
+  if (avgEnergy < 0.25) return null;
+
+  const bstr = bits.join('');
+  let searchFrom = 0;
+
+  while (searchFrom < bstr.length) {
+    const syncIdx = bstr.indexOf('0101010101', searchFrom);
+    if (syncIdx < 0) break;
+    searchFrom = syncIdx + 1;
+
+    let syncConf = 0, n = 0;
+    for (let k = syncIdx; k < Math.min(syncIdx + 30, confidences.length); k++) {
+      syncConf += confidences[k]; n++;
+    }
+    if (n === 0 || syncConf / n < 0.4) continue;
+
+    let pos = syncIdx + 30;
+    const bytes = [];
+    const byteConfs = [];
+    let safety = 0;
+
+    while (pos < bits.length - 10 && safety++ < 3000) {
+      if (bits[pos] !== 0) { pos++; continue; }
+      pos++;
+      if (pos + 9 > bits.length) break;
+      let byte = 0;
+      let byteConf = 0;
+      for (let b = 0; b < 8; b++) {
+        byte |= (bits[pos + b] << b);
+        byteConf += confidences[pos + b];
+      }
+      pos += 8;
+      if (bits[pos] !== 1) { pos++; continue; }
+      pos++;
+      bytes.push(byte);
+      byteConfs.push(byteConf / 8);
+    }
+
+    if (bytes.length < 3) continue;
+    const msgLen = bytes[0];
+    if (msgLen < 1 || msgLen > 250) continue;
+    if (bytes.length < msgLen + 3) continue;
+
+    const crcInput = new Uint8Array(msgLen + 1);
+    crcInput[0] = msgLen;
+    for (let k = 0; k < msgLen; k++) crcInput[k + 1] = bytes[k + 1];
+    const expectedCrc = (bytes[msgLen + 1] << 8) | bytes[msgLen + 2];
+    const actualCrc = crc16(crcInput);
+    if (expectedCrc !== actualCrc) continue;
+
+    let byteConfAvg = 0;
+    for (let k = 0; k < msgLen + 1 && k < byteConfs.length; k++) byteConfAvg += byteConfs[k];
+    byteConfAvg /= Math.min(msgLen + 1, byteConfs.length);
+
+    const text = new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(bytes.slice(1, 1 + msgLen)));
+    return { text, score: byteConfAvg * Math.log(msgLen + 1) };
+  }
+  return null;
+}
+
+function decodeWithPhaseSearch(samples) {
+  const selectedBaud = document.getElementById('baudSelect')
+    ? parseInt(document.getElementById('baudSelect').value) : 600;
+  const baudOrder = [selectedBaud, ...Object.keys(BAUD_PRESETS).map(Number).filter(b => b !== selectedBaud)];
+  const driftValues = [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5];
+
+  for (const baudVal of baudOrder) {
+    const baudRate = BAUD_PRESETS[baudVal].baud;
+    const bitN = Math.round(SR / baudRate);
+    const nominalBit = SR / baudRate;
+    const step = Math.max(1, Math.floor(bitN / 8));
+
+    for (const driftPct of driftValues) {
+      const actualBit = nominalBit * (1 + driftPct / 100);
+
+      for (let offset = 0; offset < bitN; offset += step) {
+        const res = tryDecodeAtDrift(samples, actualBit, offset, bitN);
+        if (res) {
+          window._lastDecodedBaud = baudVal;
+          window._lastDecodedDrift = driftPct;
+          return res.text;
+        }
+      }
+    }
+  }
+
+  throw new Error('Érvényes üzenet nem található (CRC hiba vagy nincs jel)');
+}
+
+const _canvasInit = {}; 
+
+function drawWave(data, id, color) {
+  const cv = document.getElementById(id);
+  if (!cv) return;
+
+  if (!_canvasInit[id]) {
+    cv.width = Math.max(480, cv.offsetWidth);
+    cv.height = 80;
+    _canvasInit[id] = true;
+  }
+
+  const g = cv.getContext('2d');
+  g.fillStyle = '#0a0a1a';
+  g.fillRect(0, 0, cv.width, cv.height);
+  g.strokeStyle = color || '#00d4ff';
+  g.lineWidth = 1;
+  g.beginPath();
+  const step = Math.max(1, Math.floor(data.length / cv.width));
+  for (let x = 0; x < cv.width; x++) {
+    const y = (1 - (data[x * step] || 0)) * cv.height / 2;
+    x === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
+  }
+  g.stroke();
+}
+
+let _pendingDraw = null;
+function scheduleDraw(data, id, color) {
+  if (_pendingDraw) return; 
+  _pendingDraw = { data, id, color };
+  requestAnimationFrame(() => {
+    if (_pendingDraw) {
+      drawWave(_pendingDraw.data, _pendingDraw.id, _pendingDraw.color);
+      _pendingDraw = null;
+    }
+  });
+}
+
+function floatToWav(pcm) {
+  const i16 = new Int16Array(pcm.length);
+  for (let i = 0; i < pcm.length; i++) i16[i] = Math.max(-32768, Math.min(32767, pcm[i] * 32767));
+  const buf = new ArrayBuffer(44 + i16.byteLength);
+  const v = new DataView(buf);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0,'RIFF'); v.setUint32(4, 36 + i16.byteLength, true);
+  w(8,'WAVE'); w(12,'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true); v.setUint32(24, SR, true); v.setUint32(28, SR * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data');
+  v.setUint32(40, i16.byteLength, true);
+  new Int16Array(buf, 44).set(i16);
+  return buf;
+}
+
+function encode() {
+  const text = document.getElementById('inputText').value;
+  if (!text) return;
+  const c = getCtx(); if (c.state === 'suspended') c.resume();
+  const pcm = pokeyGenerate(textToBits(text));
+  const buf = c.createBuffer(1, pcm.length, SR);
+  buf.getChannelData(0).set(pcm);
+  const src = c.createBufferSource();
+  src.buffer = buf; src.connect(c.destination); src.start();
+  drawWave(pcm, 'waveCanvas', '#00d4ff');
+  document.getElementById('encStatus').textContent =
+    `✓ Lejátszva (${text.length} kar · ${(pcm.length/SR).toFixed(2)}s · ${Math.round(EXACT_BAUD)} baud)`;
+  document.getElementById('encStatus').className = 'status ok';
+}
+
+function showDecoded(text) {
+  const baud = window._lastDecodedBaud || '?';
+  const drift = window._lastDecodedDrift || 0;
+  const driftStr = drift !== 0 ? ` · drift ${drift > 0 ? '+' : ''}${drift.toFixed(2)}%` : '';
+  document.getElementById('decodedText').textContent = text;
+  document.getElementById('decStatus').textContent = `✓ Dekódolva @ ${baud} baud${driftStr}: "${text}"`;
+  document.getElementById('decStatus').className = 'status ok';
+}
+
+function downloadWav() {
+  const text = document.getElementById('inputText').value;
+  if (!text) return;
+  const pcm = pokeyGenerate(textToBits(text));
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([floatToWav(pcm)], {type: 'audio/wav'}));
+  a.download = 'atari_adat.wav'; a.click();
+}
+
+function decodeFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  document.getElementById('decStatus').textContent = 'Beolvasás...';
+  document.getElementById('decStatus').className = 'status';
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    try {
+      const c = getCtx(); if (c.state === 'suspended') await c.resume();
+      const ab = await c.decodeAudioData(e.target.result);
+      let samples;
+      if (Math.abs(ab.sampleRate - SR) < 100) {
+        samples = ab.getChannelData(0);
+      } else {
+        const ratio = ab.sampleRate / SR;
+        const newLen = Math.floor(ab.length / ratio);
+        const src2 = ab.getChannelData(0);
+        samples = new Float32Array(newLen);
+        for (let i = 0; i < newLen; i++) samples[i] = src2[Math.floor(i * ratio)];
+      }
+      drawWave(samples, 'decCanvas', '#e94560');
+      const text = decodeWithPhaseSearch(samples);
+      showDecoded(text);
+    } catch (err) {
+      document.getElementById('decodedText').textContent = '—';
+      document.getElementById('decStatus').textContent = '✗ ' + err.message;
+      document.getElementById('decStatus').className = 'status err';
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// --- Jelszintmérő vizualizáció ---
+// Közös skálázó: dB → százalék egy adott min..max sávon
+function dbToPct(db, minDb, maxDb) {
+  if (!isFinite(db)) return 0;
+  const pct = (db - minDb) / (maxDb - minDb) * 100;
+  return Math.max(0, Math.min(100, pct));
+}
+
+function setBar(barId, textId, pct, text, color) {
+  const bar = document.getElementById(barId);
+  const txt = document.getElementById(textId);
+  if (!bar || !txt) return;
+  bar.style.width = pct + '%';
+  bar.style.background = color;
+  txt.textContent = text;
+  txt.style.color = color;
+}
+
+// Referencia frekvenciák a zaj/SNR becsléshez — távol a F0 és F1 környékétől
+const NOISE_REF_FREQS = [1000, 2000, 8000, 10000];
+
+function computeMetrics(input) {
+  // Peak és RMS
+  let sumSq = 0, maxAmp = 0;
+  for (let i = 0; i < input.length; i++) {
+    const v = input[i];
+    sumSq += v * v;
+    const a = Math.abs(v);
+    if (a > maxAmp) maxAmp = a;
+  }
+  const rms = Math.sqrt(sumSq / input.length);
+
+  // Goertzel a célfrekvenciákon
+  const N = input.length;
+  const eF0 = goertzel(input, 0, N, EXACT_F0);
+  const eF1 = goertzel(input, 0, N, EXACT_F1);
+
+  // Referencia frekvenciák a zajbecsléshez
+  let eNoise = 0;
+  for (const f of NOISE_REF_FREQS) eNoise += goertzel(input, 0, N, f);
+  eNoise /= NOISE_REF_FREQS.length;
+
+  // Goertzel energia normalizáció: a kimenet (N/2)² * amplitude² körül van.
+  // A relatív összehasonlításhoz ez mindegy, csak az arány számít.
+  const eTarget = eF0 + eF1;
+  const snrRatio = eNoise > 0 ? eTarget / (2 * eNoise) : 0;  // /2 mert eTarget két bin
+  const snrDb = snrRatio > 0 ? 10 * Math.log10(snrRatio) : -Infinity;
+
+  // Egyedi bin-szint dB-ben (normalizálva N-hez, hogy a teljes amplitúdó 0 dB legyen)
+  // sqrt(E)/N ≈ amplitude/2 egy ideális szinuszra
+  const normDb = (e) => {
+    if (e <= 0) return -Infinity;
+    const amp = 2 * Math.sqrt(e) / N;
+    return amp > 0 ? 20 * Math.log10(amp) : -Infinity;
+  };
+  const f0Db = normDb(eF0);
+  const f1Db = normDb(eF1);
+
+  const peakDb = maxAmp > 0 ? 20 * Math.log10(maxAmp) : -Infinity;
+  const rmsDb  = rms > 0 ? 20 * Math.log10(rms) : -Infinity;
+
+  // F0/F1 balance dB-ben (abszolút különbség)
+  const balanceDb = (eF0 > 0 && eF1 > 0) ? Math.abs(10 * Math.log10(eF0 / eF1)) : Infinity;
+
+  return { peak: maxAmp, rms, peakDb, rmsDb, snrDb, f0Db, f1Db, eF0, eF1, balanceDb };
+}
+
+function updateMicMeter(m) {
+  // --- RMS bar (-60 ... 0 dBFS) ---
+  let rmsCol = '#555', rmsTxt;
+  if (!isFinite(m.rmsDb) || m.rmsDb < -50) { rmsCol = '#555'; rmsTxt = 'nincs jel'; }
+  else if (m.rmsDb < -35)                  { rmsCol = '#ff8800'; rmsTxt = 'túl halk'; }
+  else if (m.rmsDb < -20)                  { rmsCol = '#ffcc00'; rmsTxt = 'gyenge'; }
+  else if (m.rmsDb < -6)                   { rmsCol = '#00ff88'; rmsTxt = 'jó'; }
+  else                                     { rmsCol = '#00d4ff'; rmsTxt = 'erős'; }
+  setBar('rmsBar', 'rmsText',
+    dbToPct(m.rmsDb, -60, 0),
+    isFinite(m.rmsDb) ? `${m.rmsDb.toFixed(1)} dBFS · ${rmsTxt}` : '-∞ dBFS',
+    rmsCol);
+
+  // --- Peak bar (-60 ... 0 dBFS) ---
+  let peakCol = '#555', peakTxt;
+  if (!isFinite(m.peakDb) || m.peakDb < -40) { peakCol = '#555'; peakTxt = 'nincs jel'; }
+  else if (m.peakDb < -26)                   { peakCol = '#ff8800'; peakTxt = 'alacsony'; }
+  else if (m.peakDb < -12)                   { peakCol = '#ffcc00'; peakTxt = 'közepes'; }
+  else if (m.peakDb < -3)                    { peakCol = '#00ff88'; peakTxt = 'jó'; }
+  else if (m.peakDb < -1)                    { peakCol = '#00d4ff'; peakTxt = 'maximum közeli'; }
+  else                                       { peakCol = '#e94560'; peakTxt = '⚠ CLIPPING'; }
+  setBar('peakBar', 'peakText',
+    dbToPct(m.peakDb, -60, 0),
+    isFinite(m.peakDb) ? `${m.peakDb.toFixed(1)} dBFS · ${peakTxt}` : '-∞ dBFS',
+    peakCol);
+
+  // --- SNR bar (0 ... 30 dB) ---
+  let snrCol = '#555', snrTxt;
+  if (!isFinite(m.snrDb) || m.snrDb < 3)  { snrCol = '#555'; snrTxt = 'nincs cél-jel'; }
+  else if (m.snrDb < 6)                   { snrCol = '#e94560'; snrTxt = 'zajos'; }
+  else if (m.snrDb < 12)                  { snrCol = '#ff8800'; snrTxt = 'gyenge'; }
+  else if (m.snrDb < 18)                  { snrCol = '#ffcc00'; snrTxt = 'elfogadható'; }
+  else if (m.snrDb < 25)                  { snrCol = '#00ff88'; snrTxt = 'jó'; }
+  else                                    { snrCol = '#00d4ff'; snrTxt = 'kiváló'; }
+  setBar('snrBar', 'snrText',
+    dbToPct(m.snrDb, 0, 30),
+    isFinite(m.snrDb) ? `${m.snrDb.toFixed(1)} dB · ${snrTxt}` : '- dB',
+    snrCol);
+
+  // --- F0 / F1 külön sávok (-80 ... -20 dB) ---
+  // Egy tiszta 0.85 amplitúdójú szinusz bin-amplitúdója kb. -1.4 dB,
+  // de a háttérzaj miatt reálisan -80 ... -20 sávot használunk.
+  const barRange = { lo: -80, hi: -20 };
+  const colorFor = (db) => {
+    if (!isFinite(db) || db < -70) return '#555';
+    if (db < -55) return '#ff8800';
+    if (db < -40) return '#ffcc00';
+    if (db < -30) return '#00ff88';
+    return '#00d4ff';
+  };
+  setBar('f0Bar', 'f0Text',
+    dbToPct(m.f0Db, barRange.lo, barRange.hi),
+    isFinite(m.f0Db) ? `${m.f0Db.toFixed(1)} dB` : '-∞ dB',
+    colorFor(m.f0Db));
+  setBar('f1Bar', 'f1Text',
+    dbToPct(m.f1Db, barRange.lo, barRange.hi),
+    isFinite(m.f1Db) ? `${m.f1Db.toFixed(1)} dB` : '-∞ dB',
+    colorFor(m.f1Db));
+
+  // --- Diagnosztikai tanács (prioritás sorrendben) ---
+  const adv = document.getElementById('micAdvice');
+  let advice = '…', advCol = '#888';
+
+  if (!isFinite(m.peakDb) || m.peakDb < -40) {
+    advice = '🔇 Nincs jel — indítsd a teszt hangot vagy ellenőrizd a mikrofont';
+  } else if (m.peakDb > -1) {
+    advice = '📢 CLIPPING — csökkentsd a hangerőt vagy vidd távolabb a mikrofont';
+    advCol = '#e94560';
+  } else if (m.peakDb > -3) {
+    advice = '⚠ Közel a torzításhoz — egy kicsit halkítsd';
+    advCol = '#ff8800';
+  } else if (m.rmsDb < -35) {
+    advice = '📣 Túl halk — emeld a hangerőt vagy vidd közelebb a mikrofont';
+    advCol = '#ff8800';
+  } else if (isFinite(m.snrDb) && m.snrDb < 6) {
+    advice = '🔊 Túl zajos — csökkentsd a háttérzajt vagy közelítsd a mikrofont';
+    advCol = '#e94560';
+  } else if (isFinite(m.balanceDb) && m.balanceDb > 10 && m.rmsDb > -30) {
+    const weaker = m.eF0 < m.eF1 ? 'space (5310 Hz)' : 'mark (3976 Hz)';
+    advice = `⚖ Kiegyensúlyozatlan: ${weaker} gyenge (Δ ${m.balanceDb.toFixed(1)} dB) — HP/LP szűrőt a hangláncban?`;
+    advCol = '#ffcc00';
+  } else if (m.snrDb >= 18 && m.peakDb < -3 && m.rmsDb > -30) {
+    advice = '✓ Kiváló jelminőség — indulhat a dekódolás';
+    advCol = '#00d4ff';
+  } else if (m.snrDb >= 12) {
+    advice = '✓ Jó jelminőség';
+    advCol = '#00ff88';
+  } else if (m.snrDb >= 6) {
+    advice = '… Elfogadható, de tovább javítható';
+    advCol = '#ffcc00';
+  }
+  adv.textContent = advice;
+  adv.style.color = advCol;
+}
+
+function resetMicMeter() {
+  ['rms','peak','snr','f0','f1'].forEach(k => {
+    const bar = document.getElementById(k + 'Bar');
+    const txt = document.getElementById(k + 'Text');
+    if (bar) { bar.style.width = '0%'; bar.style.background = '#555'; }
+    if (txt) { txt.textContent = '-'; txt.style.color = '#888'; }
+  });
+  const adv = document.getElementById('micAdvice');
+  if (adv) { adv.textContent = '—'; adv.style.color = '#888'; }
+}
+
+// --- Kalibrációs (teszt) hang generálása és lejátszása ---
+// Folyamatos 10101010... minta — tökéletes F0/F1 váltakozás 600 baud-on
+function generateCalibrationPcm(seconds) {
+  const baudRate = BAUD_PRESETS[600].baud;
+  const bitLen = SR / baudRate;
+  const totalBits = Math.floor(seconds * baudRate);
+  const totalSamples = Math.ceil(totalBits * bitLen) + 1;
+  const raw = new Float32Array(totalSamples);
+
+  let phase = 0.0;
+  for (let i = 0; i < totalBits; i++) {
+    const freq = (i & 1) ? EXACT_F1 : EXACT_F0;
+    const inc = 2 * Math.PI * freq / SR;
+    const startIdx = Math.round(i * bitLen);
+    const endIdx = Math.round((i + 1) * bitLen);
+    for (let s = startIdx; s < endIdx && s < totalSamples; s++) {
+      raw[s] = Math.sin(phase) >= 0 ? 1.0 : -1.0;
+      phase += inc;
+    }
+  }
+
+  // Ugyanaz a 8 kHz-es egyfokozatú RC aluláteresztő, mint a normál adásnál
+  const dt = 1.0 / SR;
+  const rc = 1.0 / (2 * Math.PI * 8000);
+  const alpha = dt / (rc + dt);
+  const out = new Float32Array(raw.length);
+  out[0] = raw[0];
+  for (let i = 1; i < raw.length; i++) out[i] = out[i-1] + alpha * (raw[i] - out[i-1]);
+
+  let mx = 0;
+  for (let i = 0; i < out.length; i++) if (Math.abs(out[i]) > mx) mx = Math.abs(out[i]);
+  if (mx > 0) for (let i = 0; i < out.length; i++) out[i] = out[i] / mx * 0.85;
+  return out;
+}
+
+let calToneSource = null;
+async function toggleCalibrationTone() {
+  const btn = document.getElementById('calToneBtn');
+  if (calToneSource) {
+    try { calToneSource.stop(); } catch {}
+    calToneSource = null;
+    btn.textContent = '🔊 Teszt hang';
+    btn.classList.remove('active');
+    return;
+  }
+  const c = getCtx(); if (c.state === 'suspended') await c.resume();
+  // 1 másodperces loop — hosszú elég, hogy ne legyen klikk a loop-ponton, rövid elég, hogy kevés memóriát vegyen
+  const pcm = generateCalibrationPcm(1.0);
+  const buf = c.createBuffer(1, pcm.length, SR);
+  buf.getChannelData(0).set(pcm);
+  const src = c.createBufferSource();
+  src.buffer = buf;
+  src.loop = true;
+  src.connect(c.destination);
+  src.start();
+  calToneSource = src;
+  btn.textContent = '⏹ Teszt hang';
+  btn.classList.add('active');
+}
+
+function toggleMic() {
+  if (micListening && micMode === 'decode') stopMic();
+  else if (micListening && micMode === 'calibrate') { stopMic(); setTimeout(() => startMic('decode'), 50); }
+  else startMic('decode');
+}
+
+function toggleCalibrationMic() {
+  if (micListening && micMode === 'calibrate') stopMic();
+  else if (micListening && micMode === 'decode') { stopMic(); setTimeout(() => startMic('calibrate'), 50); }
+  else startMic('calibrate');
+}
+
+const WORKLET_CODE = `
+class MicCaptureProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.chunkSize = 4096;
+    this.buffer = new Float32Array(this.chunkSize);
+    this.bufPos = 0;
+  }
+  process(inputs) {
+    const input = inputs[0];
+    if (!input || !input[0]) return true;
+    const channel = input[0];
+    for (let i = 0; i < channel.length; i++) {
+      this.buffer[this.bufPos++] = channel[i];
+      if (this.bufPos >= this.chunkSize) {
+        this.port.postMessage(this.buffer.slice(0));
+        this.bufPos = 0;
+      }
+    }
+    return true;
+  }
+}
+registerProcessor('mic-capture', MicCaptureProcessor);
+`;
+
+let workletNode = null;
+
+async function startMic(mode = 'decode') {
+  try {
+    if (!window.AudioWorkletNode) {
+      throw new Error('A böngésző nem támogatja az AudioWorklet-et');
+    }
+
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    });
+    const c = getCtx(); if (c.state === 'suspended') await c.resume();
+
+    if (!c._workletLoaded) {
+      const blob = new Blob([WORKLET_CODE], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      await c.audioWorklet.addModule(url);
+      URL.revokeObjectURL(url);
+      c._workletLoaded = true;
+    }
+
+    const src = c.createMediaStreamSource(micStream);
+    workletNode = new AudioWorkletNode(c, 'mic-capture');
+
+    micBuf = [];
+    micDecoded = false;
+    micMode = mode;
+
+    const selectedBaud = parseInt(document.getElementById('baudSelect').value);
+    const maxBits = 150 * 10 + 70;
+    const bufSeconds = (maxBits / BAUD_PRESETS[selectedBaud].baud) * 1.5;
+    const MAX_SAMPLES = Math.floor(SR * bufSeconds);
+    const MIN_SAMPLES_FOR_DECODE = SR * 0.8;
+
+    let lastDecodeAttempt = 0;
+    let sampleCounter = 0;
+    const DECODE_INTERVAL = SR * 0.5;
+
+    let signalDetected = false;
+    let silenceCounter = 0;
+    let decoding = false; 
+
+    workletNode.port.onmessage = (e) => {
+      if (!micListening) return;
+      const input = e.data; 
+      scheduleDraw(input, 'decCanvas', '#e94560');
+
+      // --- Részletes metrikák a mérőhöz (minden chunkra) ---
+      const metrics = computeMetrics(input);
+      updateMicMeter(metrics);
+
+      // --- Kalibráló módban csak a mérés fut, dekódolás nem ---
+      if (micMode === 'calibrate') {
+        document.getElementById('decStatus').textContent =
+          `🎯 Kalibrálás fut · RMS ${isFinite(metrics.rmsDb) ? metrics.rmsDb.toFixed(1) : '-∞'} dBFS · SNR ${isFinite(metrics.snrDb) ? metrics.snrDb.toFixed(1) : '-'} dB`;
+        return;
+      }
+
+      // --- Dekódoló mód ---
+      for (let i = 0; i < input.length; i++) micBuf.push(input[i]);
+      sampleCounter += input.length;
+
+      if (micBuf.length > MAX_SAMPLES) {
+        micBuf = micBuf.slice(micBuf.length - MAX_SAMPLES);
+      }
+
+      const ENERGY_THRESHOLD = 0.001;
+      const hasSignal = (metrics.rms * metrics.rms) > ENERGY_THRESHOLD;
+
+      if (hasSignal) {
+        signalDetected = true;
+        silenceCounter = 0;
+      } else if (signalDetected) {
+        silenceCounter += input.length;
+        if (silenceCounter >= SR * 0.3) {
+          lastDecodeAttempt = 0; 
+        }
+      } else {
+        if (micBuf.length > SR * 2) {
+          micBuf = micBuf.slice(-Math.floor(SR * 0.5));
+          sampleCounter = 0;
+        }
+        if (!micDecoded) {
+          document.getElementById('decStatus').textContent = `🎤 Hallgat... (csend)`;
+        }
+        return;
+      }
+
+      if (micDecoded || decoding) return;
+      if (micBuf.length < MIN_SAMPLES_FOR_DECODE) {
+        document.getElementById('decStatus').textContent = `🎤 Gyűjtés... (${(micBuf.length/SR).toFixed(1)}s · jel)`;
+        return;
+      }
+
+      if (sampleCounter - lastDecodeAttempt < DECODE_INTERVAL) {
+        document.getElementById('decStatus').textContent = `🎤 Jel rögzítve (${(micBuf.length/SR).toFixed(1)}s)`;
+        return;
+      }
+      lastDecodeAttempt = sampleCounter;
+
+      decoding = true;
+      const snapshot = micBuf.slice(); 
+      setTimeout(() => {
+        try {
+          if (!micListening || micDecoded) { decoding = false; return; }
+          const text = decodeWithPhaseSearch(snapshot);
+          showDecoded(text);
+          micDecoded = true;
+          decoding = false;
+          setTimeout(() => {
+            micDecoded = false; micBuf = []; sampleCounter = 0;
+            lastDecodeAttempt = 0; signalDetected = false; silenceCounter = 0;
+            if (micListening) {
+              document.getElementById('decStatus').textContent = '🎤 Hallgat... (kész a következő üzenethez)';
+              document.getElementById('decStatus').className = 'status';
+            }
+          }, 2500);
+        } catch (err) {
+          decoding = false;
+          if (silenceCounter >= SR * 0.3) {
+            micBuf = []; signalDetected = false; silenceCounter = 0;
+            document.getElementById('decStatus').textContent = '🎤 Hallgat... (előző jel sikertelen)';
+          } else {
+            document.getElementById('decStatus').textContent =
+              `🎤 Jel rögzítve (${(micBuf.length/SR).toFixed(1)}s · próbálkozás)`;
+          }
+        }
+      }, 0);
+    };
+
+    src.connect(workletNode);
+    micListening = true;
+
+    const micBtn = document.getElementById('micBtn');
+    const calBtn = document.getElementById('calMicBtn');
+
+    if (mode === 'calibrate') {
+      calBtn.textContent = '⏹ Kalibráló';
+      calBtn.classList.add('active');
+      micBtn.textContent = '🎤 Mikrofon';
+      micBtn.classList.remove('active');
+      document.getElementById('decStatus').textContent = '🎯 Kalibráló mód — mérés folyamatban';
+      document.getElementById('decodedText').textContent = '— (kalibráló módban a dekódolás szünetel)';
+    } else {
+      micBtn.textContent = '⏹ Leállítás';
+      micBtn.classList.add('active');
+      calBtn.textContent = '🎯 Kalibráló';
+      calBtn.classList.remove('active');
+      document.getElementById('decStatus').textContent = '🎤 Hallgat... játszd le a hangot a közelben';
+    }
+    document.getElementById('decStatus').className = 'status';
+
+    // Mérőpanel megjelenítése
+    document.getElementById('micMeterPanel').style.display = 'block';
+    resetMicMeter();
+
+  } catch (err) {
+    document.getElementById('decStatus').textContent = '✗ Mikrofon: ' + err.message;
+    document.getElementById('decStatus').className = 'status err';
+  }
+}
+
+function stopMic() {
+  if (workletNode) {
+    try { workletNode.port.close(); } catch {}
+    try { workletNode.disconnect(); } catch {}
+    workletNode = null;
+  }
+  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+  micListening = false; micBuf = []; micDecoded = false;
+
+  const micBtn = document.getElementById('micBtn');
+  const calBtn = document.getElementById('calMicBtn');
+  micBtn.textContent = '🎤 Mikrofon';
+  micBtn.classList.remove('active');
+  calBtn.textContent = '🎯 Kalibráló';
+  calBtn.classList.remove('active');
+
+  document.getElementById('decStatus').textContent = 'Leállítva.';
+  document.getElementById('decStatus').className = 'status';
+
+  // Mérőpanel elrejtése
+  document.getElementById('micMeterPanel').style.display = 'none';
+  resetMicMeter();
+}
+</script>
+</body>
+</html>
